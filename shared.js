@@ -93,10 +93,10 @@ const POLLER_LOCK_KEY = "dashboard_poller_lock";
 /**
  * POLLER_LOCK_TTL_MS — If a poller lock is older than this, it is considered
  * stale (the tab that created it probably closed). Another tab can then
- * take over. Set to 2× the refresh interval so normal operation never
- * triggers a false takeover.
+ * take over. Set to 2 minutes — short enough that a closed/refreshed tab's
+ * lock expires quickly, long enough that normal operation never conflicts.
  */
-const POLLER_LOCK_TTL_MS = 2 * (Number(APP_CONFIG.refreshIntervalMs) || 30 * 60 * 1000);
+const POLLER_LOCK_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
 // ─── Auto-refresh interval ────────────────────────────────────────────────────
 
@@ -408,27 +408,25 @@ export function startBackgroundPoller() {
   if (window.__dashboardPollerActive) return;
   window.__dashboardPollerActive = true;
 
-  // Try to claim the poller lock
-  if (_isPollerLockFree()) {
-    _writePollerLock();
-    if (DEBUG) console.log(`[Poller] This tab (${_tabId}) claimed the poller lock.`);
+  // Always claim the lock on page load. A page refresh destroys the old
+  // tab context, so its lock is effectively orphaned. By always claiming,
+  // we ensure the active/refreshed tab immediately becomes the poller.
+  _writePollerLock();
+  if (DEBUG) console.log(`[Poller] This tab (${_tabId}) claimed the poller lock.`);
 
-    // Start the independent timer
-    window.setInterval(async () => {
-      // Re-check lock ownership (another tab may have taken over)
-      if (!_isPollerLockFree()) {
-        if (DEBUG) console.log("[Poller] Lock lost to another tab, skipping this cycle.");
-        return;
-      }
-      _writePollerLock(); // refresh heartbeat
-      await _backgroundRefresh();
+  // Start the independent timer
+  window.setInterval(async () => {
+    // Re-check lock ownership (another tab may have taken over)
+    if (!_isPollerLockFree()) {
+      if (DEBUG) console.log("[Poller] Lock lost to another tab, skipping this cycle.");
+      return;
+    }
+    _writePollerLock(); // refresh heartbeat
+    await _backgroundRefresh();
 
-      // Notify other tabs that the cache has been updated
-      try { _broadcastChannel.postMessage("cache_updated"); } catch { /* ignore */ }
-    }, AUTO_REFRESH_MS);
-  } else {
-    if (DEBUG) console.log("[Poller] Another tab owns the poller lock. This tab is a passive reader.");
-  }
+    // Notify other tabs that the cache has been updated
+    try { _broadcastChannel.postMessage("cache_updated"); } catch { /* ignore */ }
+  }, AUTO_REFRESH_MS);
 
   // Listen for cache updates from OTHER tabs via BroadcastChannel.
   // IndexedDB does not fire storage events like localStorage, so we use

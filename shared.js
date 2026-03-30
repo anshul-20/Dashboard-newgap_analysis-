@@ -326,13 +326,28 @@ export async function fetchDashboardData() {
   // ── L2: IndexedDB (persists across refreshes and tabs) ────────────────────
   const stored = await readCache();
   if (stored && stored.data) {
+    const ageMs = Date.now() - stored.fetchedAt;
     if (DEBUG) {
-      const age = Math.round((Date.now() - stored.fetchedAt) / 1000);
+      const age = Math.round(ageMs / 1000);
       console.log(`[Cache L2] HIT (IndexedDB) — age ${age}s`);
     }
     // Promote to L1 so subsequent in-page calls skip IndexedDB reads
     _mem.data = stored.data;
     _mem.fetchedAt = stored.fetchedAt;
+
+    // If data is older than the refresh interval, trigger a background
+    // refresh immediately instead of waiting for the next poller cycle.
+    // The page renders instantly with stale data while fresh data loads.
+    if (ageMs > AUTO_REFRESH_MS) {
+      if (DEBUG) console.log(`[Cache L2] Data is stale (${Math.round(ageMs / 1000)}s old > ${Math.round(AUTO_REFRESH_MS / 1000)}s). Triggering immediate refresh…`);
+      _backgroundRefresh().then(() => {
+        if (DEBUG) console.log("[Cache] Stale data refreshed — reloading page.");
+        window.location.reload();
+      }).catch(() => {
+        if (DEBUG) console.warn("[Cache] Stale refresh failed — keeping cached data.");
+      });
+    }
+
     return stored.data;
   }
 
